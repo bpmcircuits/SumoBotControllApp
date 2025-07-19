@@ -13,17 +13,21 @@ import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.provider.Settings;
 import android.util.Log;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ListView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
@@ -74,14 +78,14 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         deviceListView = findViewById(R.id.device_list);
         deviceListAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1);
         deviceListView.setAdapter(deviceListAdapter);
 
         deviceListView.setOnItemClickListener((parent, view, position, id) -> {
             BluetoothDevice device = foundDevices.get(position);
-            if (ActivityCompat.checkSelfPermission(this,
-                    Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
             Toast.makeText(this, "Łączenie z " + device.getName(), Toast.LENGTH_SHORT).show();
@@ -92,22 +96,29 @@ public class MainActivity extends AppCompatActivity {
         bluetoothAdapter = bluetoothManager.getAdapter();
         bleScanner = bluetoothAdapter.getBluetoothLeScanner();
 
-        if (!hasPermissions()) {
-            requestPermissions();
-        } else {
-            setupScanButton();
-        }
+        setupScanButton();
     }
 
     private void setupScanButton() {
         Button scanButton = findViewById(R.id.scan_button);
         scanButton.setOnClickListener(v -> {
+            if (!hasPermissions()) {
+                showPermissionsDialog();
+                return;
+            }
+
+            if (!isLocationEnabled()) {
+                Toast.makeText(this, "Lokalizacja jest wymagana do skanowania BLE", Toast.LENGTH_LONG).show();
+                Intent intent = new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                startActivity(intent);
+                return;
+            }
+
             Log.d("BLE", "Rozpoczynanie skanowania...");
             deviceListAdapter.clear();
             foundDevices.clear();
 
-            if (ActivityCompat.checkSelfPermission(MainActivity.this,
-                    Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
 
@@ -126,8 +137,7 @@ public class MainActivity extends AppCompatActivity {
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLE", "Połączono z GATT. Rozpoczynanie odkrywania usług...");
-                if (ActivityCompat.checkSelfPermission(MainActivity.this,
-                        Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                     return;
                 }
                 gatt.discoverServices();
@@ -173,8 +183,7 @@ public class MainActivity extends AppCompatActivity {
     private void sendMessage(String message) {
         if (txCharacteristic != null && bluetoothGatt != null) {
             txCharacteristic.setValue(message.getBytes(StandardCharsets.UTF_8));
-            if (ActivityCompat.checkSelfPermission(this,
-                    Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
             bluetoothGatt.writeCharacteristic(txCharacteristic);
@@ -193,17 +202,25 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void requestPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_CONNECT
-            }, PERMISSION_REQUEST_CODE);
-        } else {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.ACCESS_FINE_LOCATION
-            }, PERMISSION_REQUEST_CODE);
-        }
+    private boolean isLocationEnabled() {
+        android.location.LocationManager locationManager = (android.location.LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        return locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
+                locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER);
+    }
+
+    private void showPermissionsDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle("Wymagane uprawnienia")
+                .setMessage("Aby aplikacja działała poprawnie, musisz ręcznie przyznać uprawnienia w ustawieniach.")
+                .setPositiveButton("Przejdź do ustawień", (dialog, which) -> redirectToAppSettings())
+                .setNegativeButton("Anuluj", null)
+                .show();
+    }
+
+    private void redirectToAppSettings() {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+        intent.setData(Uri.parse("package:" + getPackageName()));
+        startActivity(intent);
     }
 
     @Override
@@ -211,10 +228,8 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERMISSION_REQUEST_CODE) {
             boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-            if (granted) {
-                setupScanButton();
-            } else {
-                Toast.makeText(this, "Potrzebne pozwolenie na lokalizację/Bluetooth", Toast.LENGTH_LONG).show();
+            if (!granted) {
+                showPermissionsDialog();
             }
         }
     }
